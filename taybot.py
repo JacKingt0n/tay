@@ -116,7 +116,7 @@ def generate_response(user, input_text):
     learned_phrases = load_phrases()
     context = load_context(user)
 
-    # Store input and context
+    # Store input and context if non-empty
     if input_text:
         topic = tag_topic(input_text)
         save_phrase(input_text, topic)
@@ -134,7 +134,6 @@ def generate_response(user, input_text):
     if is_question(input_text):
         question_word = extract_question_word(input_text)
         topic = tag_topic(input_text)
-        # Pull relevant DB phrases
         relevant = [p[0] for p in learned_phrases if p[1] == topic] or [p[0] for p in learned_phrases]
         context_phrases = [p[0] for p in context if p[1] == topic] or [p[0] for p in context]
         db_snippet = random.choice(relevant)[:20] if relevant else input_text
@@ -169,6 +168,13 @@ async def on_message(message):
     if message.author == bot.user:
         return
 
+    # Learn from all messages, respond only when tagged or in tay-bot
+    input_text = clean_input(message.content)
+    if input_text:
+        topic = tag_topic(input_text)
+        save_phrase(input_text, topic)
+        save_context(str(message.author), input_text, topic)
+
     if bot.user.mentioned_in(message) or message.channel.name == "tay-bot":
         response = generate_response(str(message.author), message.content)
         await message.channel.send(response)
@@ -183,7 +189,11 @@ async def hello(ctx):
 @bot.command()
 async def phrases(ctx):
     """Show number of learned phrases."""
-    count = len(load_phrases())
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM phrases")
+    count = c.fetchone()[0]
+    conn.close()
     await ctx.send(f"Kek {ctx.author}, I got {count} memes in my head! {random.choice(EMOJIS)}")
 
 @bot.command()
