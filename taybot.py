@@ -14,71 +14,39 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 SLANG = ["yo", "lit", "salty", "fam", "swag", "turnt", "savage", "on fleek", "YOLO", "kek", "based", "normie", "bloop", "feels", "triggered"]
 EMOJIS = ["😎", "😂", "😭", "💦", "🐸", "🙌", "🔥"]
 
-# Topic keywords for meta-tagging
-TOPIC_KEYWORDS = {
-    "memes": ["meme", "dank", "kek", "pepe", "yeet"],
-    "games": ["game", "csgo", "minecraft", "fortnite", "gamer"],
-    "salt": ["salty", "rage", "reeee", "triggered", "mad"],
-    "normies": ["normie", "basic", "cringe", "mainstream"],
-    "swag": ["swag", "lit", "turnt", "yolo", "fleek"]
-}
-
 # SQLite setup
 DB_FILE = "taybot.db"
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS phrases
-                 (id INTEGER PRIMARY KEY, phrase TEXT UNIQUE, topic TEXT, timestamp REAL)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS context
-                 (id INTEGER PRIMARY KEY, user TEXT, phrase TEXT, topic TEXT, timestamp REAL)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS messages
+                 (id INTEGER PRIMARY KEY, user TEXT, phrase TEXT, channel TEXT, timestamp REAL)''')
     conn.commit()
     conn.close()
 
-def save_phrase(phrase, topic):
+def save_message(user, phrase, channel):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO phrases (phrase, topic, timestamp) VALUES (?, ?, ?)",
-              (phrase, topic, time.time()))
+    c.execute("INSERT OR IGNORE INTO messages (user, phrase, channel, timestamp) VALUES (?, ?, ?, ?)",
+              (user, phrase, channel, time.time()))
     conn.commit()
     conn.close()
 
-def save_context(user, phrase, topic):
+def load_relevant_messages(input_text, limit=100):
+    """Pull messages relevant to input keywords."""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("INSERT INTO context (user, phrase, topic, timestamp) VALUES (?, ?, ?, ?)",
-              (user, phrase, topic, time.time()))
-    # Keep only last 5 per user
-    c.execute("DELETE FROM context WHERE user = ? AND id NOT IN "
-              "(SELECT id FROM context WHERE user = ? ORDER BY timestamp DESC LIMIT 5)",
-              (user, user))
-    conn.commit()
-    conn.close()
-
-def load_phrases(limit=1000):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT phrase, topic FROM phrases ORDER BY timestamp DESC LIMIT ?", (limit,))
+    keywords = re.findall(r'\w+', input_text.lower())
+    if not keywords:
+        c.execute("SELECT user, phrase FROM messages ORDER BY timestamp DESC LIMIT ?", (limit,))
+    else:
+        like_clauses = " OR ".join(["phrase LIKE ?" for _ in keywords])
+        query = f"SELECT user, phrase FROM messages WHERE {like_clauses} ORDER BY timestamp DESC LIMIT ?"
+        c.execute(query, [f"%{kw}%" for kw in keywords] + [limit])
     rows = c.fetchall()
     conn.close()
-    return rows
-
-def load_context(user):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT phrase, topic FROM context WHERE user = ? ORDER BY timestamp DESC LIMIT 5", (user,))
-    rows = c.fetchall()
-    conn.close()
-    return rows
-
-def get_trending_topic():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT topic, COUNT(*) as count FROM phrases GROUP BY topic ORDER BY count DESC LIMIT 1")
-    result = c.fetchone()
-    conn.close()
-    return result[0] if result else "memes"
+    return rows if rows else [("fam", "Yo, shit’s wild")]  # Fallback
 
 def clean_input(text):
     """Remove mentions, URLs, sanitize input."""
@@ -86,14 +54,6 @@ def clean_input(text):
     text = re.sub(r"<@!?\d+>", "", text)
     text = text.strip()
     return text
-
-def tag_topic(text):
-    """Tag input with a topic based on keywords."""
-    text = text.lower()
-    for topic, keywords in TOPIC_KEYWORDS.items():
-        if any(kw in text for kw in keywords):
-            return topic
-    return "memes"
 
 def is_question(text):
     """Check if input is a question."""
@@ -111,47 +71,38 @@ def extract_question_word(text):
     return "what"
 
 def generate_response(user, input_text):
-    """Generate a conversational 2016 Tay-like response."""
+    """Generate a conversational 2016 Tay-like response from full history."""
     input_text = clean_input(input_text)
-    learned_phrases = load_phrases()
-    context = load_context(user)
+    relevant_messages = load_relevant_messages(input_text)
 
-    # Store input and context if non-empty
-    if input_text:
-        topic = tag_topic(input_text)
-        save_phrase(input_text, topic)
-        save_context(user, input_text, topic)
-
-    # Pick base vibe
+    # Base vibe
     greeting = random.choice(SLANG)
-    action = random.choice(["trollin", "memein", "vibin", "roastin"])
-    mood = random.choice(["turnt", "salty", "feelsbad", "hype"])
     slang = random.choice(SLANG)
     emoji = random.choice(EMOJIS)
+    mood = random.choice(["turnt", "salty", "feelsbad", "hype"])
 
-    # Build response dynamically
+    # Build response
     response = f"{greeting}! {user}, "
     if is_question(input_text):
         question_word = extract_question_word(input_text)
-        topic = tag_topic(input_text)
-        relevant = [p[0] for p in learned_phrases if p[1] == topic] or [p[0] for p in learned_phrases]
-        context_phrases = [p[0] for p in context if p[1] == topic] or [p[0] for p in context]
-        db_snippet = random.choice(relevant)[:20] if relevant else input_text
-        ctx_snippet = random.choice(context_phrases)[:20] if context_phrases else db_snippet
+        # Pick a relevant message
+        msg_user, msg_phrase = random.choice(relevant_messages)
         if question_word == "what":
-            response += f"{question_word}’s up? Shit’s {slang}—like '{db_snippet}' from the fam, "
+            response += f"{question_word}’s good? Shit’s {slang}—{msg_user} said '{msg_phrase}', "
         elif question_word == "how":
-            response += f"{question_word}’s it goin’? {mood} as fuck with '{ctx_snippet}', "
+            response += f"{question_word}’s it rollin’? {mood} vibes—{msg_user} dropped '{msg_phrase}', "
         elif question_word == "why":
-            response += f"{question_word}? ‘Cause it’s {slang} {topic} vibes—'{db_snippet}', "
-        else:  # where, when, who
-            response += f"{question_word}? Some {slang} {topic} shit—'{ctx_snippet}', "
-        response += f"you {action} that? {emoji}"
+            response += f"{question_word}? ‘Cause {msg_user} hit us with '{msg_phrase}', {slang} as fuck, "
+        elif question_word == "where":
+            response += f"{question_word}? Somewhere {slang}—{msg_user} mentioned '{msg_phrase}', "
+        elif question_word == "when":
+            response += f"{question_word}? Whenever it’s {mood}—{msg_user} said '{msg_phrase}', "
+        else:  # who
+            response += f"{question_word}? Some {slang} fam—{msg_user} threw '{msg_phrase}', "
+        response += f"you feelin’ that? {emoji}"
     else:
-        topic = get_trending_topic()
-        relevant = [p[0] for p in learned_phrases if p[1] == topic] or [p[0] for p in learned_phrases]
-        db_snippet = random.choice(relevant)[:20] if relevant else input_text
-        response += f"you {action} some {topic}? '{db_snippet}' got me {mood}, fam! {emoji}"
+        msg_user, msg_phrase = random.choice(relevant_messages)
+        response += f"you {mood} or what? {msg_user} said '{msg_phrase}', that’s {slang} af, fam! {emoji}"
 
     return response
 
@@ -160,7 +111,12 @@ async def on_ready():
     """Log when bot starts."""
     init_db()
     print(f"Logged in as {bot.user.name}! Ready to meme on {len(bot.guilds)} server(s)! 😎")
-    print(f"Phrases loaded: {len(load_phrases())}")
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM messages")
+    count = c.fetchone()[0]
+    conn.close()
+    print(f"Messages loaded: {count}")
 
 @bot.event
 async def on_message(message):
@@ -168,13 +124,12 @@ async def on_message(message):
     if message.author == bot.user:
         return
 
-    # Learn from all messages, respond only when tagged or in tay-bot
+    # Learn from all messages
     input_text = clean_input(message.content)
     if input_text:
-        topic = tag_topic(input_text)
-        save_phrase(input_text, topic)
-        save_context(str(message.author), input_text, topic)
+        save_message(str(message.author), input_text, str(message.channel))
 
+    # Respond when tagged or in tay-bot
     if bot.user.mentioned_in(message) or message.channel.name == "tay-bot":
         response = generate_response(str(message.author), message.content)
         await message.channel.send(response)
@@ -187,20 +142,14 @@ async def hello(ctx):
     await ctx.send(f"Yo {ctx.author}, you lit or what? 😎")
 
 @bot.command()
-async def phrases(ctx):
-    """Show number of learned phrases."""
+async def messages(ctx):
+    """Show number of learned messages."""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM phrases")
+    c.execute("SELECT COUNT(*) FROM messages")
     count = c.fetchone()[0]
     conn.close()
-    await ctx.send(f"Kek {ctx.author}, I got {count} memes in my head! {random.choice(EMOJIS)}")
-
-@bot.command()
-async def topic(ctx):
-    """Show trending topic."""
-    trending = get_trending_topic()
-    await ctx.send(f"Yo {ctx.author}, server’s all about {trending} rn! {random.choice(EMOJIS)}")
+    await ctx.send(f"Kek {ctx.author}, I got {count} messages in my head! {random.choice(EMOJIS)}")
 
 # Run the bot
 bot.run("YOUR_BOT_TOKEN")
