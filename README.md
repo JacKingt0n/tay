@@ -234,7 +234,7 @@ bot.run("YOUR_BOT_TOKEN")
 ```
 Swap with token:
 ```
-bot.run("MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5")
+bot.run("YOUR_BOT_TOKEN")
 ```
 Save: `Ctrl+O`, `Enter`, `Ctrl+X`.
 > **Fix**: If token errors:
