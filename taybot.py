@@ -22,7 +22,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # 2016 slang and vibe
-SLANG = ["yo", "lit", "salty", "fam", "swag", "turnt", "savage", "on fleek", "yolo", "kek", "based", "normie", "bloop", "feels", "triggered"]
+SLANG = ["yo", "tay", "lit", "salty", "fam", "swag", "turnt", "savage", "on fleek", "yolo", "kek", "based", "normie", "bloop", "feels", "triggered"]
 EMOJIS = ["😎", "😂", "😭", "💦", "🐸", "🙌", "🔥"]
 # Meta-tags for topics and sentiment
 TOPICS = ["lag", "420", "moon", "game", "vape", "meme", "shit"]
@@ -54,7 +54,7 @@ DB_FILE = "taybot.db"
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    # Messages table now includes tags
+    # Messages table includes tags
     c.execute('''CREATE TABLE IF NOT EXISTS messages
                  (id INTEGER PRIMARY KEY, user TEXT, phrase TEXT, channel TEXT, timestamp REAL, tags TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS settings
@@ -251,7 +251,7 @@ def generate_response(user, input_text, is_chaos=False):
     retries = Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
     session.mount("http://", HTTPAdapter(max_retries=retries))
 
-    # Call Ollama API
+    # Call Ollama API with lower temp and repeat penalty
     start_time = time.time()
     try:
         logger.debug(f"Sending prompt to Ollama: {prompt[:100]}...")
@@ -259,7 +259,8 @@ def generate_response(user, input_text, is_chaos=False):
             "model": "taybot",
             "prompt": prompt,
             "max_tokens": max_tokens,
-            "temperature": 1.0,
+            "temperature": 0.7,  # Lowered for focused chaos
+            "repeat_penalty": 1.2,  # Penalize repetition
             "stream": False
         }
         response = session.post(OLLAMA_URL, json=payload, timeout=20)
