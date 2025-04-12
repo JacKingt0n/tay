@@ -6,6 +6,7 @@ import sqlite3
 import time
 from transformers import DistilBertTokenizer, DistilBertModel
 import torch
+import asyncio
 
 # Bot setup
 intents = discord.Intents.default()
@@ -31,11 +32,11 @@ def init_db():
     conn.commit()
     conn.close()
 
-def save_message(user, phrase, channel):
+def save_message(user, phrase, channel, timestamp):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("INSERT OR IGNORE INTO messages (user, phrase, channel, timestamp) VALUES (?, ?, ?, ?)",
-              (user, phrase, channel, time.time()))
+              (user, phrase, channel, timestamp))
     conn.commit()
     conn.close()
 
@@ -93,6 +94,22 @@ def extract_question_word(text):
             return word
     return "what"
 
+async def fetch_channel_history():
+    """Fetch recent message history from all accessible channels."""
+    for guild in bot.guilds:
+        for channel in guild.text_channels:
+            try:
+                async for message in channel.history(limit=100):
+                    if message.author != bot.user:
+                        input_text = clean_input(message.content)
+                        if input_text:
+                            timestamp = message.created_at.timestamp()
+                            save_message(str(message.author), input_text, str(channel), timestamp)
+            except discord.errors.Forbidden:
+                print(f"Skipped channel {channel} - no perms")
+            except Exception as e:
+                print(f"Error fetching history for {channel}: {e}")
+
 def generate_response(user, input_text):
     """Generate a smarter 2016 Tay-like response with LLM."""
     input_text = clean_input(input_text)
@@ -135,6 +152,8 @@ def generate_response(user, input_text):
 async def on_ready():
     """Log when bot starts."""
     init_db()
+    print(f"Fetching history...")
+    await fetch_channel_history()
     print(f"Logged in as {bot.user.name}! Ready to meme on {len(bot.guilds)} server(s)! 😎")
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -152,7 +171,7 @@ async def on_message(message):
     # Learn from all messages
     input_text = clean_input(message.content)
     if input_text:
-        save_message(str(message.author), input_text, str(message.channel))
+        save_message(str(message.author), input_text, str(message.channel), time.time())
 
     # Respond when tagged or in tay-bot
     if bot.user.mentioned_in(message) or message.channel.name == "tay-bot":
