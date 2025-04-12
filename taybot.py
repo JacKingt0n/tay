@@ -22,7 +22,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # 2016 slang and vibe
-SLANG = ["yo", "tay", "lit", "salty", "fam", "swag", "turnt", "savage", "on fleek", "yolo", "kek", "based", "normie", "bloop", "feels", "triggered"]
+SLANG = ["yo", "lit", "salty", "fam", "swag", "turnt", "savage", "on fleek", "yolo", "kek", "based", "normie", "bloop", "feels", "triggered"]
 EMOJIS = ["😎", "😂", "😭", "💦", "🐸", "🙌", "🔥"]
 # Meta-tags for topics and sentiment
 TOPICS = ["lag", "420", "moon", "game", "vape", "meme", "shit"]
@@ -59,9 +59,24 @@ def init_db():
                  (id INTEGER PRIMARY KEY, user TEXT, phrase TEXT, channel TEXT, timestamp REAL, tags TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS settings
                  (key TEXT PRIMARY KEY, value TEXT)''')
-    # Index tags for fast queries on NVMe
+    # Index tags for fast queries
     c.execute('''CREATE INDEX IF NOT EXISTS idx_tags ON messages(tags)''')
     c.execute('''CREATE INDEX IF NOT EXISTS idx_timestamp ON messages(timestamp)''')
+    conn.commit()
+    conn.close()
+
+def get_setting(key, default="normal"):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT value FROM settings WHERE key = ?", (key,))
+    result = c.fetchone()
+    conn.close()
+    return result[0] if result else default
+
+def set_setting(key, value):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
     conn.commit()
     conn.close()
 
