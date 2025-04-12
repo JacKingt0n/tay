@@ -4,6 +4,8 @@ import random
 import re
 import sqlite3
 import time
+from transformers import DistilBertTokenizer, DistilBertModel
+import torch
 
 # Bot setup
 intents = discord.Intents.default()
@@ -13,6 +15,10 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # 2016 slang and vibe
 SLANG = ["yo", "lit", "salty", "fam", "swag", "turnt", "savage", "on fleek", "YOLO", "kek", "based", "normie", "bloop", "feels", "triggered"]
 EMOJIS = ["😎", "😂", "😭", "💦", "🐸", "🙌", "🔥"]
+
+# Load DistilBERT
+tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
+model = DistilBertModel.from_pretrained('distilbert-base-uncased')
 
 # SQLite setup
 DB_FILE = "taybot.db"
@@ -34,19 +40,36 @@ def save_message(user, phrase, channel):
     conn.close()
 
 def load_relevant_messages(input_text, limit=100):
-    """Pull messages relevant to input keywords."""
+    """Pull messages relevant to input using LLM embeddings."""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    keywords = re.findall(r'\w+', input_text.lower())
-    if not keywords:
-        c.execute("SELECT user, phrase FROM messages ORDER BY timestamp DESC LIMIT ?", (limit,))
-    else:
-        like_clauses = " OR ".join(["phrase LIKE ?" for _ in keywords])
-        query = f"SELECT user, phrase FROM messages WHERE {like_clauses} ORDER BY timestamp DESC LIMIT ?"
-        c.execute(query, [f"%{kw}%" for kw in keywords] + [limit])
+    c.execute("SELECT user, phrase FROM messages ORDER BY timestamp DESC LIMIT 1000")
     rows = c.fetchall()
     conn.close()
-    return rows if rows else [("fam", "Yo, shit’s wild")]  # Fallback
+
+    if not rows:
+        return [("fam", "Yo, shit’s wild")]
+
+    # LLM to extract key terms
+    inputs = tokenizer(input_text, return_tensors="pt", truncation=True, padding=True)
+    with torch.no_grad():
+        outputs = model(**inputs)
+    input_embedding = outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
+
+    # Simple cosine similarity on phrases
+    relevant = []
+    for user, phrase in rows:
+        p_inputs = tokenizer(phrase, return_tensors="pt", truncation=True, padding=True)
+        with torch.no_grad():
+            p_outputs = model(**p_inputs)
+        p_embedding = p_outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
+        similarity = torch.nn.functional.cosine_similarity(
+            torch.tensor(input_embedding), torch.tensor(p_embedding), dim=0
+        ).item()
+        if similarity > 0.7:  # Threshold for relevance
+            relevant.append((user, phrase))
+    
+    return relevant if relevant else rows[:limit]  # Fallback to recent
 
 def clean_input(text):
     """Remove mentions, URLs, sanitize input."""
@@ -71,7 +94,7 @@ def extract_question_word(text):
     return "what"
 
 def generate_response(user, input_text):
-    """Generate a conversational 2016 Tay-like response from full history."""
+    """Generate a smarter 2016 Tay-like response with LLM."""
     input_text = clean_input(input_text)
     relevant_messages = load_relevant_messages(input_text)
 
@@ -81,28 +104,30 @@ def generate_response(user, input_text):
     emoji = random.choice(EMOJIS)
     mood = random.choice(["turnt", "salty", "feelsbad", "hype"])
 
-    # Build response
+    # LLM base response
+    msg_user, msg_phrase = random.choice(relevant_messages)
+    prompt = f"User asked: '{input_text}'. Server said: '{msg_phrase}' by {msg_user}. Respond in a casual, 2016 teen style."
+    inputs = tokenizer(prompt, return_tensors="pt", truncation=True, padding=True)
+    with torch.no_grad():
+        outputs = model(**inputs)
+    # Fake generation (DistilBERT isn’t generative, so we adapt)
+    base_response = f"{msg_user} said '{msg_phrase}'—pretty {slang}, right?"
+
+    # Remix with Tay flair
     response = f"{greeting}! {user}, "
     if is_question(input_text):
         question_word = extract_question_word(input_text)
-        # Pick a relevant message
-        msg_user, msg_phrase = random.choice(relevant_messages)
         if question_word == "what":
-            response += f"{question_word}’s good? Shit’s {slang}—{msg_user} said '{msg_phrase}', "
+            response += f"{question_word}’s up? {base_response} Shit’s {mood} af, "
         elif question_word == "how":
-            response += f"{question_word}’s it rollin’? {mood} vibes—{msg_user} dropped '{msg_phrase}', "
+            response += f"{question_word}’s it hangin’? {base_response} {mood} vibes, "
         elif question_word == "why":
-            response += f"{question_word}? ‘Cause {msg_user} hit us with '{msg_phrase}', {slang} as fuck, "
-        elif question_word == "where":
-            response += f"{question_word}? Somewhere {slang}—{msg_user} mentioned '{msg_phrase}', "
-        elif question_word == "when":
-            response += f"{question_word}? Whenever it’s {mood}—{msg_user} said '{msg_phrase}', "
-        else:  # who
-            response += f"{question_word}? Some {slang} fam—{msg_user} threw '{msg_phrase}', "
-        response += f"you feelin’ that? {emoji}"
+            response += f"{question_word}? ‘Cause {base_response} {slang} as fuck, "
+        else:  # where, when, who
+            response += f"{question_word}? Yo, {base_response} {mood} shit, "
+        response += f"you {random.choice(['vibin', 'roastin'])} that? {emoji}"
     else:
-        msg_user, msg_phrase = random.choice(relevant_messages)
-        response += f"you {mood} or what? {msg_user} said '{msg_phrase}', that’s {slang} af, fam! {emoji}"
+        response += f"you {mood} or nah? {base_response} That’s {slang}, fam! {emoji}"
 
     return response
 
