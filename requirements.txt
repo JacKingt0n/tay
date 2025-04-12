@@ -1,3 +1,5 @@
 discord.py==2.3.2
 requests==2.32.3
 numpy==1.26.4
+# Note: Ollama is required but not pip-installable. Install via:
+# curl -fsSL https://ollama.com/install.sh | sh
