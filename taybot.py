@@ -22,8 +22,11 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # 2016 slang and vibe
-SLANG = ["yo", "lit", "salty", "fam", "swag", "turnt", "savage", "on fleek", "yolo", "kek", "based", "normie", "bloop", "feels", "triggered"]
+SLANG = ["yo", "tay", "lit", "salty", "fam", "swag", "turnt", "savage", "on fleek", "yolo", "kek", "based", "normie", "bloop", "feels", "triggered"]
 EMOJIS = ["😎", "😂", "😭", "💦", "🐸", "🙌", "🔥"]
+# Meta-tags for topics and sentiment
+TOPICS = ["lag", "420", "moon", "game", "vape", "meme", "shit"]
+SENTIMENTS = ["angry", "positive", "chaotic"]
 
 # System prompt
 SYSTEM_PROMPT = """
@@ -51,43 +54,73 @@ DB_FILE = "taybot.db"
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
+    # Messages table now includes tags
     c.execute('''CREATE TABLE IF NOT EXISTS messages
-                 (id INTEGER PRIMARY KEY, user TEXT, phrase TEXT, channel TEXT, timestamp REAL)''')
+                 (id INTEGER PRIMARY KEY, user TEXT, phrase TEXT, channel TEXT, timestamp REAL, tags TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS settings
                  (key TEXT PRIMARY KEY, value TEXT)''')
+    # Index tags for fast queries on NVMe
+    c.execute('''CREATE INDEX IF NOT EXISTS idx_tags ON messages(tags)''')
+    c.execute('''CREATE INDEX IF NOT EXISTS idx_timestamp ON messages(timestamp)''')
     conn.commit()
     conn.close()
+
+def tag_message(text):
+    """Generate meta-tags for a message."""
+    tags = set()
+    text_lower = text.lower()
+    words = re.findall(r'\b\w+\b', text_lower)
+    
+    # Slang tags
+    for slang in SLANG:
+        if slang in words:
+            tags.add(slang)
+    
+    # Topic tags
+    for topic in TOPICS:
+        if topic in text_lower:
+            tags.add(topic)
+    
+    # Sentiment and chaos tags
+    if len(text) >= 10 and sum(c.isupper() for c in text) / len(text) > 0.8:
+        tags.add("angry")
+    emoji_count = len(re.findall(r'[\U0001F600-\U0001F6FF]', text))
+    if emoji_count >= 3:
+        tags.add("chaotic")
+    if emoji_count > 0:
+        tags.add("positive")
+    if len(words) < 5 and any(word in SLANG for word in words):
+        tags.add("slang")
+    
+    return ",".join(tags) if tags else "misc"
 
 def save_message(user, phrase, channel, timestamp):
+    tags = tag_message(phrase)
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO messages (user, phrase, channel, timestamp) VALUES (?, ?, ?, ?)",
-              (user, phrase, channel, timestamp))
-    conn.commit()
-    conn.close()
-
-def get_setting(key, default="normal"):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT value FROM settings WHERE key = ?", (key,))
-    result = c.fetchone()
-    conn.close()
-    return result[0] if result else default
-
-def set_setting(key, value):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+    c.execute("INSERT OR IGNORE INTO messages (user, phrase, channel, timestamp, tags) VALUES (?, ?, ?, ?, ?)",
+              (user, phrase, channel, timestamp, tags))
     conn.commit()
     conn.close()
 
 def load_relevant_messages(input_text, limit=5):
-    """Pull recent messages for context, always include latest."""
+    """Pull relevant messages based on input tags."""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    # Get recent messages, not just keyword-based
-    c.execute("SELECT user, phrase FROM messages ORDER BY timestamp DESC LIMIT ?", (limit,))
+    input_tags = tag_message(input_text).split(",")
+    if not input_tags or input_tags == ["misc"]:
+        # Fallback to recent if no tags
+        c.execute("SELECT user, phrase FROM messages ORDER BY timestamp DESC LIMIT ?", (limit,))
+    else:
+        # Build LIKE query for tags
+        like_clauses = " OR ".join(["tags LIKE ?" for _ in input_tags])
+        query = f"SELECT user, phrase FROM messages WHERE {like_clauses} ORDER BY timestamp DESC LIMIT ?"
+        c.execute(query, [f"%{tag}%" for tag in input_tags] + [limit])
     rows = c.fetchall()
+    # Fallback to recent if no matches
+    if not rows:
+        c.execute("SELECT user, phrase FROM messages ORDER BY timestamp DESC LIMIT 3")
+        rows = c.fetchall()
     conn.close()
     return rows if rows else [("fam", "Yo, shit’s wild")]
 
@@ -124,10 +157,8 @@ def has_tay_trigger(text):
 def has_chaos_trigger(text):
     """Check for chaotic content (ALL CAPS or 3+ emojis)."""
     try:
-        # ALL CAPS (mostly uppercase, at least 10 chars)
         if len(text) >= 10 and sum(c.isupper() for c in text) / len(text) > 0.8:
             return True
-        # 3+ emojis
         emoji_count = len(re.findall(r'[\U0001F600-\U0001F6FF]', text))
         return emoji_count >= 3
     except Exception as e:
@@ -184,12 +215,12 @@ def generate_response(user, input_text, is_chaos=False):
     input_text = strip_mentions(input_text)
     relevant_messages = load_relevant_messages(input_text)
 
-    # Build context with recent messages
+    # Build context with relevant messages
     context = "\n".join([f"{msg_user}: {msg_phrase}" for msg_user, msg_phrase in relevant_messages])
     if is_chaos:
-        prompt = f"{SYSTEM_PROMPT}\n\n4chan chaos—absurd, unhinged, Discord-safe.\nRecent server chaos:\n{context}\n\n{user} says: '{input_text}'"
+        prompt = f"{SYSTEM_PROMPT}\n\n4chan chaos—absurd, unhinged, Discord-safe.\nRelevant server chaos:\n{context}\n\n{user} says: '{input_text}'"
     else:
-        prompt = f"{SYSTEM_PROMPT}\n\nRecent server chaos:\n{context}\n\n{user} says: '{input_text}'"
+        prompt = f"{SYSTEM_PROMPT}\n\nRelevant server chaos:\n{context}\n\n{user} says: '{input_text}'"
 
     # Adjust for concise mode
     mode = get_setting("response_mode", "normal")
